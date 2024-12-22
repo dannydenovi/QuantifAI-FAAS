@@ -1,0 +1,17 @@
+version: 1.0
+provider:
+  name: openfaas
+  gateway: http://127.0.0.1:8080
+functions:
+  quantifai-faas:
+    lang: python3-http-debian
+    handler: ./quantifai-faas
+    image: dannydenovi/quantifai-faas:latest
+    environment:
+      exec_timeout: 5000s
+      read_timeout: 5000s
+      write_timeout: 5000s
+    annotations:
+      com.openfaas.scale.zero: "true"
+      com.openfaas.scale.min: "0"
+      com.openfaas.scale.max: "2"
