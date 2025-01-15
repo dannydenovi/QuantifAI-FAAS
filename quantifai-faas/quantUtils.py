@@ -69,4 +69,3 @@ def quantize_model_dynamic(model, training_dataloader, num_batches=1, type=torch
 
 
     return quantized_model
-
