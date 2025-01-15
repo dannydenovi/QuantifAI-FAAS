@@ -42,12 +42,12 @@ def evaluate_metrics(test_dataloader, model, is_classification=False):
 
 
 # Quantization
-def quantize_model_fx(model, training_dataloader, num_batches=1):
+def quantize_model_fx(model, training_dataloader, num_batches=1, type=torch.qint8):
     """Quantize a model using FX Graph Mode."""
     model.eval()
     qconfig = QConfig(
-        activation=MinMaxObserver.with_args(dtype=torch.quint8),
-        weight=PerChannelMinMaxObserver.with_args(dtype=torch.qint8)
+        activation=MinMaxObserver.with_args(dtype=torch.quint8 if type == torch.qint8 else torch.float16),
+        weight=PerChannelMinMaxObserver.with_args(dtype=type)
     )
     model.qconfig = qconfig
     example_inputs = next(iter(training_dataloader))[0]
@@ -57,3 +57,16 @@ def quantize_model_fx(model, training_dataloader, num_batches=1):
         if i >= num_batches - 1:
             break
     return quantize_fx.convert_fx(prepared_model)
+
+
+def quantize_model_dynamic(model, training_dataloader, num_batches=1, type=torch.qint8):
+    """Quantize a model using Dynamic Quantization."""
+    quantized_model = torch.quantization.quantize_dynamic(
+        model,  # Modello da quantizzare
+        {nn.Linear, nn.RNNCell, nn.GRUCell, nn.LSTMCell},  # Tipi di livelli da quantizzare dinamicamente
+        dtype=type # Tipo di quantizzazione (opzionale, default è qint8)
+    )
+
+
+    return quantized_model
+

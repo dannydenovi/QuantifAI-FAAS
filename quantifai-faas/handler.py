@@ -4,10 +4,10 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 import base64
 import json
 import logging
-from torch import device, cuda, load, save
+import torch
 from torch.utils.data import DataLoader
 from genericDataset import GenericDataset
-from quantUtils import evaluate_metrics, quantize_model_fx
+from quantUtils import evaluate_metrics, quantize_model_fx, quantize_model_dynamic
 from utils import load_class_from_file, parse_dynamic_args, save_onnx
 
 # Set up logging
@@ -16,7 +16,7 @@ logging.basicConfig(level=logging.DEBUG, format="%(asctime)s - %(levelname)s - %
 
 
 # Set device
-DEVICE = device("cuda" if cuda.is_available() else "cpu")
+DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 logging.info(f"Device set to: {DEVICE}")
 
 
@@ -107,6 +107,17 @@ def execute(req: dict) -> dict:
         num_batches = int(form.get("num_batches", 1))
         is_classification = form.get("is_classification", "False").lower() == "true"
         save_onnx_flag = form.get("save_onnx", "False").lower() == "true"
+        evaluate_metrics_flag = form.get("evaluate_metrics", "False").lower() == "true"
+        quantization_mode = form.get("quantization_mode", "static")
+        quantization_type = form.get("quantization_type", "int8")
+
+        quantization_mode = "static" if quantization_mode not in ["static", "dynamic"] else quantization_mode
+
+        if quantization_type == "int8":
+            quantization_type = torch.qint8
+        else:
+            quantization_type = torch.float16
+
         dynamic_args = parse_dynamic_args(form.get("args"))
         logging.info("Parsed parameters.")
 
@@ -123,25 +134,31 @@ def execute(req: dict) -> dict:
         logging.info("Model class loaded.")
 
         # Load model weights
-        model.load_state_dict(load(model_weights_path, map_location=DEVICE))
+        model.load_state_dict(torch.load(model_weights_path, map_location=DEVICE))
         logging.info("Model weights loaded.")
 
-        # Evaluate raw model
-        raw_metrics = evaluate_metrics(test_loader, model, is_classification=is_classification)
-        logging.info("Raw model evaluation completed.")
+        if evaluate_metrics_flag:
+            # Evaluate raw model
+            raw_metrics = evaluate_metrics(test_loader, model, is_classification=is_classification)
+            logging.info("Raw model evaluation completed.")
 
         # Quantize model
-        quantized_model = quantize_model_fx(model, train_loader, num_batches)
+        if quantization_mode == "dynamic":
+            quantized_model = quantize_model_dynamic(model, train_loader, num_batches, type=quantization_type)
+        else:
+            quantized_model = quantize_model_fx(model, train_loader, num_batches)
+
         quantized_model_path = "quantized_model.pth"
-        save(quantized_model.state_dict(), quantized_model_path)
+        torch.save(quantized_model.state_dict(), quantized_model_path)
         logging.info(f"Quantized model saved at: {quantized_model_path}")
 
         # Encode quantized model as Base64
         quantized_model_base64 = encode_file_to_base64(quantized_model_path)
 
-        # Evaluate quantized model
-        quantized_metrics = evaluate_metrics(test_loader, quantized_model, is_classification=is_classification)
-        logging.info("Quantized model evaluation completed.")
+        if evaluate_metrics_flag:
+            # Evaluate quantized model
+            quantized_metrics = evaluate_metrics(test_loader, quantized_model, is_classification=is_classification)
+            logging.info("Quantized model evaluation completed.")
 
         # Save ONNX file if required
         onnx_base64 = None
