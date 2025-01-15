@@ -117,6 +117,7 @@ def execute(req: dict) -> dict:
             quantization_type = torch.qint8
         else:
             quantization_type = torch.float16
+        
 
         dynamic_args = parse_dynamic_args(form.get("args"))
         logging.info("Parsed parameters.")
@@ -141,12 +142,16 @@ def execute(req: dict) -> dict:
             # Evaluate raw model
             raw_metrics = evaluate_metrics(test_loader, model, is_classification=is_classification)
             logging.info("Raw model evaluation completed.")
+        else:
+            raw_metrics = None
 
         # Quantize model
         if quantization_mode == "dynamic":
+            logging.info("Dynamic quantization...")
             quantized_model = quantize_model_dynamic(model, train_loader, num_batches, type=quantization_type)
         else:
-            quantized_model = quantize_model_fx(model, train_loader, num_batches)
+            logging.info("Static quantization...")
+            quantized_model = quantize_model_fx(model, train_loader, num_batches, type=quantization_type)
 
         quantized_model_path = "quantized_model.pth"
         torch.save(quantized_model.state_dict(), quantized_model_path)
@@ -159,6 +164,8 @@ def execute(req: dict) -> dict:
             # Evaluate quantized model
             quantized_metrics = evaluate_metrics(test_loader, quantized_model, is_classification=is_classification)
             logging.info("Quantized model evaluation completed.")
+        else:
+            quantized_metrics = None
 
         # Save ONNX file if required
         onnx_base64 = None
