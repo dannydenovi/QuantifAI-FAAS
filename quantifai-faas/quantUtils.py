@@ -61,11 +61,25 @@ def quantize_model_fx(model, training_dataloader, num_batches=1, type=torch.qint
 
 def quantize_model_dynamic(model, training_dataloader, num_batches=1, type=torch.qint8):
     """Quantize a model using Dynamic Quantization."""
+
+    # Set the quantization engine
+    torch.backends.quantized.engine = 'qnnpack'
+
+    # Set the model to evaluation mode before quantization
+    model.eval()
+
+    # Apply dynamic quantization to the specified layers
     quantized_model = torch.quantization.quantize_dynamic(
-        model,  # Modello da quantizzare
-        {nn.Linear, nn.RNNCell, nn.GRUCell, nn.LSTMCell},  # Tipi di livelli da quantizzare dinamicamente
-        dtype=type # Tipo di quantizzazione (opzionale, default è qint8)
+        model,  # The model to quantize
+        {nn.Linear},  # Layers to quantize dynamically (only Linear layers in this case)
+        dtype=type  # Type of quantization (e.g., torch.qint8)
     )
 
+    # Perform a pass through the model for calibration (no need for explicit calibration in dynamic quantization)
+    for i, (batch_data, _) in enumerate(training_dataloader):
+        # Since we are only interested in updating the internal statistics, we don't need the model's output
+        quantized_model(batch_data)
+        if i >= num_batches - 1:
+            break
 
     return quantized_model
