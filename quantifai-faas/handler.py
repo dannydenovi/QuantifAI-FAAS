@@ -127,9 +127,18 @@ def execute(req: dict) -> dict:
         dynamic_args = parse_dynamic_args(form.get("args"))
         logging.info("Parsed parameters.")
 
+
+        logging.info(f"Shape of training set: {torch.load(training_set_path)['data'].shape}")
+        logging.info(f"Shape of test set: {torch.load(test_set_path)['data'].shape}")
+        
+        #take shape from training set
+        shape = torch.load(training_set_path)['data'][0].shape
+        
+        logging.info(f"Shape of data: {shape}")
+        logging.info(f"Shape data type: {type(shape)}")
         # Load datasets
-        train_ds = GenericDataset(training_set_path, batch_size)
-        test_ds = GenericDataset(test_set_path, batch_size)
+        train_ds = GenericDataset(training_set_path, shape)
+        test_ds = GenericDataset(test_set_path, shape)
         train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True)
         test_loader = DataLoader(test_ds, batch_size=batch_size, shuffle=False)
         logging.info("Datasets loaded.")
@@ -145,7 +154,7 @@ def execute(req: dict) -> dict:
 
         if evaluate_metrics_flag:
             # Evaluate raw model
-            raw_metrics = evaluate_metrics(test_loader, model, is_classification=False)
+            raw_metrics = evaluate_metrics(test_loader, model)
             #model size in Mb
             model_size = os.path.getsize(model_weights_path) / (1024 * 1024)
             raw_metrics["model_size"] = model_size
@@ -203,7 +212,7 @@ def execute(req: dict) -> dict:
             for quantized_type, quantized_models_dict in quantized_models.items():
                 quantized_metrics[quantized_type] = {}
                 for quantized_dtype, quantized_model in quantized_models_dict.items():
-                    metrics = evaluate_metrics(test_loader, quantized_model, is_classification=False)
+                    metrics = evaluate_metrics(test_loader, quantized_model)
                     #measure model size in Mb
                     model_size = os.path.getsize(f"quantized_model_{quantized_type}_{quantized_dtype}.pth") / (1024 * 1024)
                     metrics["model_size"] = model_size
