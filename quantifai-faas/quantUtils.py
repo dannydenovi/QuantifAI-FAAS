@@ -4,8 +4,11 @@ from torch.quantization import quantize_fx, QConfig, MinMaxObserver, PerChannelM
 from torch.ao.quantization.qconfig_mapping import QConfigMapping
 
 # Metrics Calculation
-def evaluate_metrics(test_dataloader, model, is_classification=False):
+def evaluate_metrics(test_dataloader, model):
     """Evaluate all metrics in one pass."""
+
+    is_classification = True 
+
     model.eval()
     total, correct, total_loss, predictions, true_labels = 0, 0, 0.0, [], []
     loss_fn = nn.CrossEntropyLoss() if is_classification else nn.MSELoss()
