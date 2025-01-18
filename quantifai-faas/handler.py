@@ -1,14 +1,13 @@
 import os
 import sys
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 import base64
 import json
 import logging
 import torch
 from torch.utils.data import DataLoader
-from genericDataset import GenericDataset
-from quantUtils import evaluate_metrics, quantize_model_fx, quantize_model_dynamic
-from utils import load_class_from_file, parse_dynamic_args, save_onnx
+from .genericDataset import GenericDataset
+from .quantUtils import evaluate_metrics, quantize_model_fx, quantize_model_dynamic
+from .utils import load_class_from_file, parse_dynamic_args
 
 # Set up logging
 logging.basicConfig(level=logging.DEBUG, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -97,8 +96,8 @@ def execute(req: dict) -> dict:
         # Save datasets and model files
         training_set_path = save_file_from_base64_string(files.get('trainingSetFile'), "training_dataset.pth")
         test_set_path = save_file_from_base64_string(files.get('testSetFile'), "test_dataset.pth")
-        python_file_path = save_file(files.get('pythonFile'), "model.py")
-        model_weights_path = save_file(files.get('modelFile'), "trained_model.pth")
+        python_file_path = save_file_from_base64_string(files.get('pythonFile'), "model.py")
+        model_weights_path = save_file_from_base64_string(files.get('modelFile'), "trained_model.pth")
 
         # Extract other parameters
         model_class = form.get("model_class")
@@ -113,8 +112,15 @@ def execute(req: dict) -> dict:
         static_quantization = form.get("static_quantization")
         dynamic_quantization = form.get("dynamic_quantization")
 
-        static_quantization_dtype = static_quantization.split(",")
-        dynamic_quantization_dtype = dynamic_quantization.split(",")
+        try:
+            static_quantization_dtype = static_quantization.split(",")
+        except:
+            static_quantization_dtype = None
+        
+        try:
+            dynamic_quantization_dtype = dynamic_quantization.split(",")
+        except:
+            dynamic_quantization_dtype = None
 
 
 
@@ -134,12 +140,15 @@ def execute(req: dict) -> dict:
         logging.info("Model class loaded.")
 
         # Load model weights
-        model.load_state_dict(torch.load(model_weights_path, map_location=DEVICE))
+        model.load_state_dict(torch.load(model_weights_path, map_location=DEVICE, weights_only=False))
         logging.info("Model weights loaded.")
 
         if evaluate_metrics_flag:
             # Evaluate raw model
             raw_metrics = evaluate_metrics(test_loader, model, is_classification=False)
+            #model size in Mb
+            model_size = os.path.getsize(model_weights_path) / (1024 * 1024)
+            raw_metrics["model_size"] = model_size
             logging.info("Raw model evaluation completed.")
         else:
             raw_metrics = None
@@ -147,43 +156,30 @@ def execute(req: dict) -> dict:
 
         quantized_models = {"static_quantization": {}, "dynamic_quantization": {}}
 
-        
-        for datatype in dynamic_quantization_dtype:
-            if datatype == "int8":
-                # Quantize model using dynamic quantization (int8)
-                quantized_model = quantize_model_dynamic(model, train_loader, num_batches=num_batches, type=torch.qint8)
-                logging.info("Model quantized using dynamic quantization (int8).")
-                quantized_models["dynamic_quantization"]["int8"] = quantized_model
-            elif datatype == "float16":
-                # Quantize model using dynamic quantization (float16)
-                quantized_model = quantize_model_dynamic(model, train_loader, num_batches=num_batches, type=torch.float16)
-                logging.info("Model quantized using dynamic quantization (float16).")
-                quantized_models["dynamic_quantization"]["float16"] = quantized_model
+        logging.info(f"Model content: {raw_metrics}")
 
-            else:
-                logging.error("Invalid dynamic quantization datatype. Skipping quantization.")
+        if dynamic_quantization_dtype is not None: 
+            for datatype in dynamic_quantization_dtype:
+                if datatype == "int8":
+                    quantize(model, train_loader, num_batches, torch.qint8, quantized_models, "dynamic_quantization")
+                elif datatype == "float16":
+                    quantize(model, train_loader, num_batches, torch.float16, quantized_models, "dynamic_quantization")
+                else:
+                    logging.error(f"Invalid dynamic quantization datatype: {datatype}. Skipping quantization.")
+
+        if static_quantization_dtype is not None:
+            for datatype in static_quantization_dtype:
+                if datatype == "int8":
+                    quantize(model, train_loader, num_batches, torch.qint8, quantized_models, "static_quantization")
+                elif datatype == "float16":
+                    quantize(model, train_loader, num_batches, torch.float16, quantized_models, "static_quantization")
+                else:
+                    logging.error(f"Invalid static quantization datatype: {datatype}. Skipping quantization.")
 
 
-
-
-
-        for datatype in static_quantization_dtype:
-            if datatype == "int8":
-                # Quantize model using static quantization (int8)
-                quantized_model = quantize_model_fx(model, train_loader, num_batches=num_batches, type=torch.qint8)
-                logging.info("Model quantized using static quantization (int8).")
-                quantized_models["static_quantization"]["int8"] = quantized_model
-            elif datatype == "float16":
-                # Quantize model using static quantization (float16)
-                quantized_model = quantize_model_fx(model, train_loader, num_batches=num_batches, type=torch.float16)
-                logging.info("Model quantized using static quantization (float16).")
-                quantized_models["static_quantization"]["float16"] = quantized_model
-            else:
-                logging.error("Invalid static quantization datatype. Skipping quantization.")
 
 
         # Save quantized model to disk
-        
         for quantized_type, quantized_models_dict in quantized_models.items():
             for quantized_dtype, quantized_model in quantized_models_dict.items():
                 quantized_model_path = f"quantized_model_{quantized_type}_{quantized_dtype}.pth"
@@ -208,6 +204,9 @@ def execute(req: dict) -> dict:
                 quantized_metrics[quantized_type] = {}
                 for quantized_dtype, quantized_model in quantized_models_dict.items():
                     metrics = evaluate_metrics(test_loader, quantized_model, is_classification=False)
+                    #measure model size in Mb
+                    model_size = os.path.getsize(f"quantized_model_{quantized_type}_{quantized_dtype}.pth") / (1024 * 1024)
+                    metrics["model_size"] = model_size
                     quantized_metrics[quantized_type][quantized_dtype] = metrics
                     logging.info(f"Quantized model evaluation completed for {quantized_type} ({quantized_dtype}).")
 
@@ -215,29 +214,43 @@ def execute(req: dict) -> dict:
             quantized_metrics = None
 
         # Save ONNX file if required from quantized models
-        onnx_base64 = {}
 
-        if save_onnx_flag:
-            for quantized_type, quantized_models_dict in quantized_models.items():
-                onnx_base64[quantized_type] = {}
-                for quantized_dtype, quantized_model in quantized_models_dict.items():
-                    onnx_path = f"model_{quantized_type}_{quantized_dtype}.onnx"
-                    save_onnx(quantized_model, test_loader, onnx_path)
-                    onnx_base64[quantized_type][quantized_dtype] = encode_file_to_base64(onnx_path)
-                    logging.info(f"ONNX model saved at: {onnx_path}")
+        onnx_base64 = save_onnx_for_all_models(quantized_models, test_loader, save_onnx_flag)
 
         # Return JSON response
         response = {
             "raw_metrics": raw_metrics,
             "quantized_metrics": quantized_metrics,
-            "quantized_models": quantized_model_base64,
-            "onnx_models": onnx_base64
+            "quantized_model_base64": quantized_model_base64,
+            "onnx_base64": onnx_base64
         }
         logging.info("Execution completed. Response prepared.")
         return response
     except Exception as e:
         logging.error("Exception occurred in execute function.", exc_info=True)
         raise
+
+
+def quantize(model, train_loader, num_batches, quantization_type, quantized_models, quantization_category):
+    """Helper function to perform quantization and store results."""
+
+    quantization_dt = "int8" if quantization_type == torch.qint8 else "float16"
+
+    try:
+        # Quantize the model
+        if quantization_category == "dynamic_quantization":
+            quantized_model = quantize_model_dynamic(model, train_loader, num_batches=num_batches, type=quantization_type)
+            logging.info(f"Model quantized using dynamic quantization ({quantization_type}).")
+        elif quantization_category == "static_quantization":
+            quantized_model = quantize_model_fx(model, train_loader, num_batches=num_batches, type=quantization_type)
+            logging.info(f"Model quantized using static quantization ({quantization_type}).")
+        else:
+            raise ValueError("Invalid quantization category")
+        
+        # Store the quantized model
+        quantized_models[quantization_category][quantization_dt] = quantized_model
+    except Exception as e:
+        logging.error(f"Error during {quantization_category} ({quantization_type}) quantization: {e}")
 
 
 def save_file_from_base64_string(file_data, default_filename):
@@ -296,3 +309,51 @@ def jsonify(response):
     Converts a dictionary into a JSON response string.
     """
     return json.dumps(response)
+
+
+def save_onnx(model, dummy_input, output_path):
+    # Resetting the global export state before calling export
+    torch.onnx._globals.in_onnx_export = False
+    # Exporting the model
+    torch.onnx.export(model, dummy_input, output_path)
+
+def get_dummy_input_for_model(test_loader):
+    # Fetch a batch from the test loader (e.g., first batch)
+    batch_data, _ = next(iter(test_loader))
+
+    # Check the shape of the data, assuming batch_data has shape [batch_size, channels, length]
+    print(f"Original batch data shape: {batch_data.shape}")
+
+    # Ensure the data is in the correct shape: [batch_size, channels, length] for 1D convolutions
+    # If batch_data is 4D like [batch_size, channels, height, width], we might need to reshape it
+    if len(batch_data.shape) == 4:  # e.g., for image data, batch_size, channels, height, width
+        # Remove the extra dimension (height or width)
+        batch_data = batch_data.squeeze(-1)  # Remove the last dimension (e.g., width or height)
+
+    print(f"Reshaped batch data shape: {batch_data.shape}")
+
+    return batch_data
+
+def save_onnx_for_all_models(quantized_models, test_loader, save_onnx_flag):
+    onnx_base64 = {}
+
+    if save_onnx_flag:
+        for quantized_type, quantized_models_dict in quantized_models.items():
+            onnx_base64[quantized_type] = {}
+            for quantized_dtype, quantized_model in quantized_models_dict.items():
+                # Generate the ONNX file path
+                onnx_path = f"model_{quantized_type}_{quantized_dtype}.onnx"
+                
+                # Get a properly shaped dummy input
+                dummy_input = get_dummy_input_for_model(test_loader)
+
+                try:
+                    # Save the ONNX model
+                    save_onnx(quantized_model, dummy_input, onnx_path)
+                    # Encode the saved ONNX model into base64
+                    onnx_base64[quantized_type][quantized_dtype] = encode_file_to_base64(onnx_path)
+                    logging.info(f"ONNX model saved at: {onnx_path}")
+                except Exception as e:
+                    logging.error(f"Error saving ONNX model for {quantized_type} {quantized_dtype}: {e}")
+
+    return onnx_base64
