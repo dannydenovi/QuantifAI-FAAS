@@ -1,7 +1,6 @@
 import torch
 from torch.utils.data import Dataset, DataLoader
 from typing import Tuple, Optional
-import io
 
 
 # Dataset Handling
