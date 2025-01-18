@@ -1,8 +1,7 @@
 import torch
-from torch import nn
-from torch.quantization import quantize_fx, QConfig, MinMaxObserver, PerChannelMinMaxObserver
+import torch.nn as nn
+from torch.quantization import quantize_fx, QConfig, MinMaxObserver, PerChannelMinMaxObserver, quantize_dynamic
 from torch.ao.quantization.qconfig_mapping import QConfigMapping
-
 
 # Metrics Calculation
 def evaluate_metrics(test_dataloader, model, is_classification=False):
@@ -41,37 +40,61 @@ def evaluate_metrics(test_dataloader, model, is_classification=False):
     return results
 
 
+
+
 # Quantization
 def quantize_model_fx(model, training_dataloader, num_batches=1, type=torch.qint8):
     """Quantize a model using FX Graph Mode."""
-    model.eval()
-    qconfig = QConfig(
-        activation=MinMaxObserver.with_args(dtype=torch.quint8 if type == torch.qint8 else torch.float16),
-        weight=PerChannelMinMaxObserver.with_args(dtype=type)
-    )
-    model.qconfig = qconfig
-    example_inputs = next(iter(training_dataloader))[0]
-    prepared_model = quantize_fx.prepare_fx(model, QConfigMapping().set_global(torch.quantization.default_qconfig), example_inputs)
-    for i, (batch_data, _) in enumerate(training_dataloader):
-        prepared_model(batch_data)
-        if i >= num_batches - 1:
-            break
-    return quantize_fx.convert_fx(prepared_model)
+    try:
 
+        model_to_quantize = model
+        model_to_quantize.eval()
+        # Set the quantization configuration
+        qconfig = QConfig(
+            activation=MinMaxObserver.with_args(dtype=torch.quint8 if type == torch.qint8 else torch.float16),
+            weight=PerChannelMinMaxObserver.with_args(dtype=type)
+        )
+        model_to_quantize.qconfig = qconfig
+        
+        # Get example input from the training dataloader
+        example_inputs = next(iter(training_dataloader))[0]
+        print("Example input shape:", example_inputs.shape)  # Debugging
+
+        # Prepare the model for quantization
+        prepared_model = quantize_fx.prepare_fx(model_to_quantize, QConfigMapping().set_global(torch.quantization.default_qconfig), example_inputs)
+
+        # Forward pass for a few batches
+        for i, (batch_data, _) in enumerate(training_dataloader):
+            print(f"Processing batch {i + 1}...")  # Debugging
+            prepared_model(batch_data)
+            if i >= num_batches - 1:
+                break
+
+        # Convert the model after quantization
+        quantized_model = quantize_fx.convert_fx(prepared_model)
+        print("Quantization complete.")  # Debugging
+        
+        return quantized_model
+    except Exception as e:
+        print("Error during quantization:", e)
+        raise e  # Re-raise the exception for further handling
 
 def quantize_model_dynamic(model, training_dataloader, num_batches=1, type=torch.qint8):
-    """Quantize a model using Dynamic Quantization."""
+    """Quantize a model using Dynamic Quantization without modifying the model in place."""
 
     # Set the quantization engine
-    torch.backends.quantized.engine = 'qnnpack'
+    #torch.backends.quantized.engine = 'qnnpack'
 
     # Set the model to evaluation mode before quantization
-    model.eval()
+  
 
-    # Apply dynamic quantization to the specified layers
-    quantized_model = torch.quantization.quantize_dynamic(
-        model,  # The model to quantize
-        {nn.Linear},  # Layers to quantize dynamically (only Linear layers in this case)
+    # Create a new model by copying the original model
+    quantized_model = model
+    quantized_model.eval()
+    # Apply dynamic quantization to the specified layers (only Linear layers in this case)
+    quantized_model = quantize_dynamic(
+        quantized_model,  # The model to quantize
+        {torch.nn.Linear},  # Layers to quantize dynamically
         dtype=type  # Type of quantization (e.g., torch.qint8)
     )
 
@@ -83,3 +106,4 @@ def quantize_model_dynamic(model, training_dataloader, num_batches=1, type=torch
             break
 
     return quantized_model
+
