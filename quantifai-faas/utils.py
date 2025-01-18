@@ -81,28 +81,3 @@ def parse_dynamic_args(args):
     except Exception as e:
         logging.error("Error parsing dynamic args.", exc_info=True)
         raise
-
-
-def save_onnx(model, test_loader, output_path):
-    """
-    Save the given model in ONNX format.
-
-    Args:
-        model: The PyTorch model to save.
-        test_loader: DataLoader for the test dataset.
-        output_path: Path to save the ONNX model.
-    """
-    try:
-        # Check if the test_loader has data
-        try:
-            dummy_input = next(iter(test_loader))[0]        
-        except StopIteration:
-            raise ValueError("The test_loader is empty. Cannot generate dummy input for ONNX export.")
-
-        # Export the model to ONNX
-        logging.info(f"Saving ONNX model to {output_path}")
-        torch_onnx.export(model, dummy_input, output_path)
-        logging.info("ONNX model saved successfully.")
-    except Exception as e:
-        logging.error("Error saving ONNX model.", exc_info=True)
-        raise
