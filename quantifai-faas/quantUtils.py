@@ -7,7 +7,7 @@ from torch.ao.quantization.qconfig_mapping import QConfigMapping
 def evaluate_metrics(test_dataloader, model):
     """Evaluate all metrics in one pass."""
 
-    is_classification = True 
+    is_classification = True if determine_problem_type_from_dataloader(test_dataloader) == "classification" else False
 
     model.eval()
     total, correct, total_loss, predictions, true_labels = 0, 0, 0.0, [], []
@@ -110,3 +110,31 @@ def quantize_model_dynamic(model, training_dataloader, num_batches=1, type=torch
 
     return quantized_model
 
+def determine_problem_type_from_dataloader(dataloader):
+    """
+    Determines if the dataset in a DataLoader is for a regression or classification problem
+    based on the label values.
+
+    Args:
+        dataloader (DataLoader): The PyTorch DataLoader containing the dataset.
+
+    Returns:
+        str: 'regression' or 'classification'
+    """
+    labels = []
+
+    # Collect all labels from the DataLoader
+    for _, label in dataloader:
+        labels.extend(label.numpy())
+
+    labels = torch.tensor(labels)
+    unique_labels = labels.unique()
+
+    if labels.dtype in [torch.float32, torch.float64]:
+        # Threshold for determining regression vs classification (arbitrary: 20 unique values)
+        if len(unique_labels) > 20:
+            return "regression"
+        else:
+            return "classification"
+    else:
+        return "classification"
